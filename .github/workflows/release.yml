@@ -2,8 +2,8 @@ name: Release
 
 # Publishing a GitHub release builds the tts-cpp library, with ggml, for Basu's
 # Read Aloud engine (gsfjohnson/basu, engines/chatterbox). Each platform's build
-# attaches its own package to the release once its checks pass, with the
-# package's SHA-256 beside it (<package>.sha256):
+# attaches its own package to the release once its checks pass (GitHub lists
+# each asset's SHA-256 itself):
 #   chatterbox.cpp-<version>-windows-x86_64-clang64-vulkan.zip
 #   chatterbox.cpp-<version>-linux-x86_64-vulkan.tar.gz
 #   chatterbox.cpp-<version>-macos-arm64-metal.tar.gz
@@ -345,21 +345,16 @@ jobs:
             fi
           )
           ls -l "$PACKAGE.$ARCHIVE"
-          # sha256sum's format on every platform (macOS has only shasum, and
-          # MSYS2's sha256sum marks the name with *).
           if command -v sha256sum >/dev/null; then
-            sha=$(sha256sum "$PACKAGE.$ARCHIVE" | cut -d' ' -f1)
+            sha256sum "$PACKAGE.$ARCHIVE"
           else
-            sha=$(shasum -a 256 "$PACKAGE.$ARCHIVE" | cut -d' ' -f1)
+            shasum -a 256 "$PACKAGE.$ARCHIVE"
           fi
-          printf '%s  %s\n' "$sha" "$PACKAGE.$ARCHIVE" | tee "$PACKAGE.$ARCHIVE.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.version.outputs.package }}
-          path: |
-            ${{ steps.version.outputs.package }}.${{ matrix.archive }}
-            ${{ steps.version.outputs.package }}.${{ matrix.archive }}.sha256
+          path: ${{ steps.version.outputs.package }}.${{ matrix.archive }}
           if-no-files-found: error
 
       # The runner's own bash, not MSYS2's: gh is installed on every runner,
@@ -371,4 +366,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
           FILE: ${{ steps.version.outputs.package }}.${{ matrix.archive }}
-        run: gh release upload "$TAG" "$FILE" "$FILE.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "$TAG" "$FILE" --clobber --repo "$GITHUB_REPOSITORY"
