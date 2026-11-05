@@ -295,6 +295,7 @@ int32_t sample_next_token_ex(
 void chatterbox_log_cb(ggml_log_level level, const char * text, void * ud);
 
 extern int g_log_verbose;
+extern int g_vk_device_index;  // Basu: set_vulkan_device
 
 bool compute_prompt_feat_native(
     const std::string &  wav_path,

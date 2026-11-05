@@ -243,6 +243,21 @@ public:
     // each chunk.
     void cancel();
 
+    // Basu: the most speech tokens the next synthesize() calls may decode
+    // (options().n_predict), so a caller can cap each sentence by its
+    // length and tell a run-on from a long sentence.  n <= 0 is ignored.
+    void set_max_tokens(int n);
+
+    // Basu: the last synthesize() call's language model wrote its end of
+    // speech.  False when it ran out of tokens or of context instead: what
+    // it made then is a run-on, not the sentence.
+    bool last_stopped() const;
+
+    // Basu: synthesize() no longer clears a pending cancel() as it starts
+    // (one that arrived just before would be lost); the caller clears it,
+    // before the call, when the sentence it is for begins.
+    void clear_cancel();
+
     // Return the options the engine was constructed with (convenience for
     // callers that want to introspect the resolved n_gpu_layers / n_ctx).
     const EngineOptions & options() const;
@@ -267,5 +282,9 @@ private:
     struct Impl;
     std::unique_ptr<Impl> pimpl_;
 };
+
+// Basu: the Vulkan device (ggml-vulkan's index) every Engine created after
+// this call runs on.  Upstream always takes device 0.  Process-wide.
+TTS_CPP_API void set_vulkan_device(int index);
 
 } // namespace tts_cpp::chatterbox

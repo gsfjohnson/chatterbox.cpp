@@ -101,6 +101,8 @@ struct model_ctx {
     float cfg_rate    = 0.0f;
 };
 
+namespace tts_cpp::chatterbox::detail { extern int g_vk_device_index; }  // Basu
+
 static ggml_backend_t s3gen_init_backend(int n_gpu_layers, bool verbose) {
 #ifdef GGML_USE_CUDA
     if (n_gpu_layers > 0) {
@@ -116,12 +118,13 @@ static ggml_backend_t s3gen_init_backend(int n_gpu_layers, bool verbose) {
 #endif
 #ifdef GGML_USE_VULKAN
     if (n_gpu_layers > 0) {
-        auto * b = ggml_backend_vk_init(0);
+        const int vk_dev = tts_cpp::chatterbox::detail::g_vk_device_index;  // Basu
+        auto * b = ggml_backend_vk_init(vk_dev);
         if (b) {
             if (verbose) {
                 char desc[256] = {0};
-                ggml_backend_vk_get_device_description(0, desc, sizeof(desc));
-                fprintf(stderr, "s3gen: using Vulkan backend (device 0: %s)\n", desc);
+                ggml_backend_vk_get_device_description(vk_dev, desc, sizeof(desc));
+                fprintf(stderr, "s3gen: using Vulkan backend (device %d: %s)\n", vk_dev, desc);
             }
             return b;
         }
@@ -2924,7 +2927,8 @@ int s3gen_synthesize_to_wav(
 
     double pipeline_total = now_ms() - pipeline_t0;
     double audio_ms = 1000.0 * wav.size() / sr;
-    fprintf(stderr, "BENCH: S3GEN_INFER_MS=%.0f AUDIO_MS=%.0f\n", pipeline_total, audio_ms);
+    // Basu: otherwise a line per sentence in the host's log.
+    if (verbose) fprintf(stderr, "BENCH: S3GEN_INFER_MS=%.0f AUDIO_MS=%.0f\n", pipeline_total, audio_ms);
     vlog("\n=== pipeline: %.1f ms for %.1f ms of audio (RTF=%.2f, %.1fx %s) ===\n",
          pipeline_total, audio_ms,
          pipeline_total / audio_ms,

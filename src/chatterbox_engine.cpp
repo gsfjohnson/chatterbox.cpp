@@ -63,6 +63,7 @@ struct Engine::Impl {
     mtl_tokenizer        mtl_tok;
 
     std::atomic<bool>    cancel_flag{false};
+    bool                 last_stopped = false;  // Basu: Engine::last_stopped
 
     explicit Impl(const EngineOptions & o)
         : opts(o) {
@@ -461,7 +462,8 @@ struct Engine::Impl {
             generated.push_back(current);
         }
 
-        if (!generated.empty() && generated.back() == model.hparams.stop_speech_token) {
+        last_stopped = !generated.empty() && generated.back() == model.hparams.stop_speech_token;
+        if (last_stopped) {
             generated.pop_back();
         }
         return generated;
@@ -654,7 +656,8 @@ struct Engine::Impl {
         if (text.empty()) {
             throw std::runtime_error("Engine: text is empty");
         }
-        cancel_flag.store(false, std::memory_order_relaxed);
+        // Basu: the caller clears a pending cancel (Engine::clear_cancel).
+        last_stopped = false;
 
         const auto t3_t0 = std::chrono::steady_clock::now();
         std::vector<int32_t> speech_tokens = run_t3(text);
@@ -694,6 +697,16 @@ SynthesisResult Engine::synthesize(const std::string & text,
 
 void Engine::cancel() {
     if (pimpl_) pimpl_->cancel_flag.store(true, std::memory_order_relaxed);
+}
+
+void Engine::set_max_tokens(int n) {
+    if (pimpl_ && n > 0) pimpl_->opts.n_predict = n;
+}
+
+bool Engine::last_stopped() const { return pimpl_ && pimpl_->last_stopped; }
+
+void Engine::clear_cancel() {
+    if (pimpl_) pimpl_->cancel_flag.store(false, std::memory_order_relaxed);
 }
 
 const EngineOptions & Engine::options() const {

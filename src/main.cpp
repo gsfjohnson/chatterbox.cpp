@@ -289,6 +289,9 @@ static ggml_tensor * require_tensor(const chatterbox_model & m, const char * nam
 // so chatterbox_engine.cpp can flip it from its Engine ctor without a copy.
 int g_log_verbose = 0;
 
+// Basu: the Vulkan device both backends open (set_vulkan_device).
+int g_vk_device_index = 0;
+
 ggml_backend_t init_backend(int n_gpu_layers) {
     const bool v = g_log_verbose != 0;
 #ifdef GGML_USE_CUDA
@@ -305,12 +308,12 @@ ggml_backend_t init_backend(int n_gpu_layers) {
 #endif
 #ifdef GGML_USE_VULKAN
     if (n_gpu_layers > 0) {
-        auto * b = ggml_backend_vk_init(0);
+        auto * b = ggml_backend_vk_init(g_vk_device_index);
         if (b) {
             if (v) {
                 char desc[256] = {0};
-                ggml_backend_vk_get_device_description(0, desc, sizeof(desc));
-                fprintf(stderr, "%s: using Vulkan backend (device 0: %s)\n", __func__, desc);
+                ggml_backend_vk_get_device_description(g_vk_device_index, desc, sizeof(desc));
+                fprintf(stderr, "%s: using Vulkan backend (device %d: %s)\n", __func__, g_vk_device_index, desc);
             }
             return b;
         }
@@ -836,4 +839,8 @@ void chatterbox_log_cb(ggml_log_level level, const char * text, void * /*ud*/) {
 }
 
 } // namespace tts_cpp::chatterbox::detail
+
+namespace tts_cpp::chatterbox {
+void set_vulkan_device(int index) { detail::g_vk_device_index = index < 0 ? 0 : index; }
+} // namespace tts_cpp::chatterbox
 
