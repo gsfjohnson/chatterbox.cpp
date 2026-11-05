@@ -1,0 +1,374 @@
+name: Release
+
+# Publishing a GitHub release builds the tts-cpp library, with ggml, for Basu's
+# Read Aloud engine (gsfjohnson/basu, engines/chatterbox). Each platform's build
+# attaches its own package to the release once its checks pass, with the
+# package's SHA-256 beside it (<package>.sha256):
+#   chatterbox.cpp-<version>-windows-x86_64-clang64-vulkan.zip
+#   chatterbox.cpp-<version>-linux-x86_64-vulkan.tar.gz
+#   chatterbox.cpp-<version>-macos-arm64-metal.tar.gz
+# A platform that fails leaves the others' packages attached; re-running its
+# job attaches its package, replacing any earlier upload.
+# The tag is vX.Y.Z, or vX.Y.Z.N for this fork's Nth release of upstream's
+# X.Y.Z, where X.Y.Z is project(tts-cpp VERSION) in CMakeLists.txt; <version>
+# is the tag without its v.
+#
+# The packages are named for this repository; the CMake package inside each
+# keeps upstream's name, tts-cpp. Each is a `cmake --install` tree of static
+# libraries (libtts-cpp.a and ggml's archives, position-independent, for
+# linking into a shared library), in one folder named as the archive is, that
+# a consumer points CMAKE_PREFIX_PATH at and then find_package(tts-cpp)s. At
+# its top, BUILDINFO names the chatterbox.cpp and ggml commits and the ggml
+# patches applied, and licenses/ holds the licence of everything compiled in.
+#
+# The configuration is the one Basu's engines/chatterbox/CMakeLists.txt forces
+# on its own build of chatterbox.cpp, so a package links into the same engine
+# library:
+#   - Vulkan on Windows and Linux, Metal (its shader library embedded) on
+#     macOS; no CUDA, OpenCL or BLAS, and no dynamically loaded backends;
+#   - one processor baseline, SSE4.2 (no AVX, AVX2, FMA, F16C, AVX-512 or
+#     BMI2), and no OpenMP: no libomp, and no illegal instruction on an older
+#     processor;
+#   - ggml's own library names (TTS_CPP_GGML_LIB_PREFIX=OFF);
+#   - `-include atomic -include new`, which libc++ and GCC 15's libstdc++ need
+#     to compile chatterbox.cpp.
+# ggml is fetched at scripts/setup-ggml.sh's pin. The Vulkan packages apply
+# none of patches/, since Basu ships ggml pristine; the Metal package applies
+# the Metal ops patch, without which Chatterbox does not run on Metal.
+#
+# The toolchains are the consumers': MSYS2 CLANG64 (clang, libc++) on Windows,
+# not link-compatible with MSVC or MINGW64; GCC (libstdc++) on Ubuntu 26.04,
+# the runner Basu's Linux release builds on, since static libraries link on
+# that glibc and newer; Apple clang on macOS, arm64, for macOS 12 and later.
+#
+# A manual dispatch (Actions > Release > Run workflow, or
+# `gh workflow run release.yml --ref <branch>`) runs the same builds and checks
+# and keeps the packages as workflow artifacts only; nothing is attached
+# anywhere.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# gh release upload needs write access to the repository's releases.
+permissions:
+  contents: write
+
+env:
+  # What Basu's engines/chatterbox/CMakeLists.txt forces (see above). The
+  # graphics backend and the platform's own arguments come from the matrix.
+  SDK_CMAKE_ARGS: >-
+    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_CXX_STANDARD=17
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+    -DTTS_CPP_BUILD_LIBRARY=ON
+    -DTTS_CPP_BUILD_SHARED=OFF
+    -DTTS_CPP_BUILD_EXECUTABLES=OFF
+    -DTTS_CPP_BUILD_TESTS=OFF
+    -DTTS_CPP_INSTALL=ON
+    -DTTS_CPP_CCACHE=OFF
+    -DTTS_CPP_GGML_LIB_PREFIX=OFF
+    -DTTS_CPP_OPENMP=OFF
+    -DBUILD_SHARED_LIBS=OFF
+    -DGGML_BACKEND_DL=OFF
+    -DGGML_BUILD_TESTS=OFF
+    -DGGML_BUILD_EXAMPLES=OFF
+    -DGGML_NATIVE=OFF
+    -DGGML_AVX=OFF
+    -DGGML_AVX2=OFF
+    -DGGML_AVX_VNNI=OFF
+    -DGGML_FMA=OFF
+    -DGGML_F16C=OFF
+    -DGGML_AVX512=OFF
+    -DGGML_BMI2=OFF
+    -DGGML_OPENMP=OFF
+    -DGGML_CUDA=OFF
+    -DGGML_OPENCL=OFF
+    -DGGML_BLAS=OFF
+    -DCMAKE_DISABLE_FIND_PACKAGE_BLAS=ON
+  # The last line keeps tts-cpp's own BLAS probe (its Supertonic code, which
+  # Chatterbox does not use) from linking whatever BLAS a runner image has: an
+  # absolute path in the package's CMake files, and a library Basu's engine
+  # must not need.
+  #
+  # Windows: the Vulkan headers ggml-vulkan compiles against, since MSYS2's
+  # vulkan-loader brings none. v1.4.363, the version Basu's engine build pins.
+  VULKAN_HEADERS_COMMIT: 6802bb4733b63ed5efd3adb308a6c885ef180ea1
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # platform_args: the package's and the smoke test's configure.
+          # backend_args: the package's only. backend_lib: the graphics
+          # backend's archive. ggml_patches: from patches/, applied in order.
+          # probe_require: the backend the smoke test must find registered;
+          # none on Windows, whose runner has no Vulkan driver to open.
+          - name: windows-x86_64-clang64-vulkan
+            os: windows-latest
+            shell: msys2 {0}
+            archive: zip
+            platform_args: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+            backend_args: -DGGML_VULKAN=ON -DGGML_METAL=OFF
+            backend_lib: ggml-vulkan
+            ggml_patches: ""
+            probe_require: ""
+          - name: linux-x86_64-vulkan
+            os: ubuntu-26.04
+            shell: bash
+            archive: tar.gz
+            platform_args: ""
+            backend_args: -DGGML_VULKAN=ON -DGGML_METAL=OFF
+            backend_lib: ggml-vulkan
+            ggml_patches: ""
+            probe_require: Vulkan
+          # Built for macOS 12, the oldest a consuming app runs on: left to
+          # the runner, the objects ask for its own macOS and a consumer's
+          # link warns. TTS_CPP_ACCELERATE_FRAMEWORK, set, skips tts-cpp's
+          # find_library: its result, the framework's path in this runner's
+          # Xcode, would be exported to the package's CMake files as it is.
+          - name: macos-arm64-metal
+            os: macos-latest
+            shell: bash
+            archive: tar.gz
+            platform_args: -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+            backend_args: >-
+              -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_VULKAN=OFF
+              -DTTS_CPP_ACCELERATE_FRAMEWORK:STRING=-Wl,-framework,Accelerate
+            backend_lib: ggml-metal
+            ggml_patches: ggml-metal-chatterbox-ops.patch
+            probe_require: MTL
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-vulkan-loader
+            mingw-w64-clang-x86_64-shaderc
+            git
+            zip
+
+      # mesa-vulkan-drivers is lavapipe, a Vulkan driver on the processor, so
+      # the smoke test's Vulkan instance opens on a runner with no graphics
+      # processor: ggml registers the backend, though it lists no device.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build g++ libvulkan-dev glslc mesa-vulkan-drivers
+
+      - if: runner.os == 'macOS'
+        run: brew install cmake ninja
+
+      - name: Version
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(sed -n 's/^project(tts-cpp .*VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          if [ -z "$version" ]; then
+            echo "::error::no project(tts-cpp ... VERSION X.Y.Z) in CMakeLists.txt"
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            if ! printf '%s\n' "$TAG" | grep -Eq "^v${version//./\\.}(\.[0-9]+)?\$"; then
+              echo "::error::Release tag $TAG is neither v$version nor v$version.N (CMakeLists.txt: project(tts-cpp VERSION $version))"
+              exit 1
+            fi
+            version="${TAG#v}"
+          else
+            version="$version-g${GITHUB_SHA:0:7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "package=chatterbox.cpp-$version-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      # ggml at scripts/setup-ggml.sh's pin, the one place it is recorded, with
+      # this package's patches only (that script applies every patch).
+      - name: ggml
+        env:
+          GGML_PATCHES: ${{ matrix.ggml_patches }}
+        run: |
+          pin=$(sed -n 's/^GGML_COMMIT="\([0-9a-f]*\)"$/\1/p' scripts/setup-ggml.sh)
+          url=$(sed -n 's/^GGML_URL="\(.*\)"$/\1/p' scripts/setup-ggml.sh)
+          if [ -z "$pin" ] || [ -z "$url" ]; then
+            echo "::error::no GGML_COMMIT or GGML_URL in scripts/setup-ggml.sh"
+            exit 1
+          fi
+          git clone --quiet --filter=blob:none --no-checkout "$url" ggml
+          git -C ggml -c advice.detachedHead=false checkout --quiet "$pin"
+          for p in $GGML_PATCHES; do
+            echo "applying $p"
+            patch=$(mktemp)
+            tr -d '\r' < "patches/$p" > "$patch"
+            git -C ggml apply --whitespace=nowarn "$patch"
+          done
+          git -C ggml status --short
+          echo "GGML_COMMIT=$(git -C ggml rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - if: runner.os == 'Windows'
+        name: Vulkan headers
+        run: |
+          git init --quiet vulkan-headers
+          git -C vulkan-headers fetch --quiet --depth 1 \
+            https://github.com/KhronosGroup/Vulkan-Headers "$VULKAN_HEADERS_COMMIT"
+          git -C vulkan-headers -c advice.detachedHead=false checkout --quiet FETCH_HEAD
+          echo "VULKAN_ARGS=-DVulkan_INCLUDE_DIR=$PWD/vulkan-headers/include -DVulkan_LIBRARY=$MSYSTEM_PREFIX/lib/libvulkan-1.dll.a -DVulkan_GLSLC_EXECUTABLE=$MSYSTEM_PREFIX/bin/glslc.exe" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja $SDK_CMAKE_ARGS \
+            ${{ matrix.platform_args }} ${{ matrix.backend_args }} ${VULKAN_ARGS:-} \
+            "-DCMAKE_CXX_FLAGS=-include atomic -include new"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Install
+        run: cmake --install build --prefix "stage/${{ steps.version.outputs.package }}"
+
+      # What a consumer needs beside the libraries: the commits they were built
+      # from (Basu's engine names both in its version string), and the licence
+      # of everything compiled in.
+      - name: BUILDINFO and licences
+        env:
+          PACKAGE: ${{ steps.version.outputs.package }}
+          VERSION: ${{ steps.version.outputs.version }}
+          GGML_PATCHES: ${{ matrix.ggml_patches }}
+        run: |
+          prefix="stage/$PACKAGE"
+          compiler=$(grep -hE '^set\(CMAKE_CXX_COMPILER_(ID|VERSION) ' build/CMakeFiles/*/CMakeCXXCompiler.cmake |
+            sed 's/.*"\(.*\)".*/\1/' | paste -sd ' ' -)
+          {
+            echo "package=$PACKAGE"
+            echo "version=$VERSION"
+            echo "platform=${{ matrix.name }}"
+            echo "chatterbox_commit=$GITHUB_SHA"
+            echo "ggml_commit=$GGML_COMMIT"
+            echo "ggml_patches=${GGML_PATCHES:-none}"
+            echo "compiler=$compiler"
+          } > "$prefix/BUILDINFO"
+          cat "$prefix/BUILDINFO"
+
+          mkdir -p "$prefix/licenses"
+          cp LICENSE "$prefix/licenses/chatterbox.cpp-LICENSE.txt"
+          cp NOTICE "$prefix/licenses/chatterbox.cpp-NOTICE.txt"
+          cp ggml/LICENSE "$prefix/licenses/ggml-LICENSE.txt"
+          sed -n '/^This software is available as a choice of the following licenses/,$p' src/dr_wav.h |
+            sed '/^\*\//,$d' > "$prefix/licenses/dr_wav-LICENSE.txt"
+          test -s "$prefix/licenses/dr_wav-LICENSE.txt"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp vulkan-headers/LICENSE.md "$prefix/licenses/Vulkan-Headers-LICENSE.md"
+          fi
+
+      # Static libraries only, each built for this platform, and the files a
+      # consumer reaches for; no absolute path (this runner's, or its Xcode's)
+      # in the CMake files find_package(tts-cpp) loads. share/ggml is not one
+      # of them: it only lets tts-cpp's export name ggml's targets.
+      - name: Check package
+        env:
+          PACKAGE: ${{ steps.version.outputs.package }}
+          BACKEND_LIB: ${{ matrix.backend_lib }}
+        run: |
+          prefix="stage/$PACKAGE"
+          (cd "$prefix" && find . -type f | sort)
+          # ggml names its archives without "lib" on Windows (ggml.a).
+          g=lib
+          if [ "$RUNNER_OS" = Windows ]; then g=; fi
+          for f in BUILDINFO include/tts-cpp/chatterbox/engine.h include/ggml-backend.h \
+                   lib/libtts-cpp.a "lib/${g}ggml.a" "lib/${g}ggml-base.a" "lib/${g}ggml-cpu.a" \
+                   "lib/${g}$BACKEND_LIB.a" lib/cmake/ggml/ggml-config.cmake \
+                   share/tts-cpp/tts-cppConfig.cmake; do
+            if [ ! -f "$prefix/$f" ]; then
+              echo "::error::$f is missing from the package"
+              exit 1
+            fi
+          done
+          shared=$(find "$prefix" -name '*.so' -o -name '*.so.*' -o -name '*.dylib' \
+                                  -o -name '*.dll' -o -name '*.dll.a' -o -name '*.exe')
+          if [ -n "$shared" ]; then
+            echo "::error::not a static package: $shared"
+            exit 1
+          fi
+          if grep -nE '[";:]/[A-Za-z]|[";][A-Za-z]:/' "$prefix"/lib/cmake/ggml/*.cmake "$prefix"/share/tts-cpp/*.cmake; then
+            echo "::error::absolute paths in the package's CMake files"
+            exit 1
+          fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            for lib in "$prefix"/lib/*.a; do
+              archs=$(lipo -archs "$lib")
+              echo "$lib: $archs"
+              [ "$archs" = arm64 ] || exit 1
+            done
+          fi
+
+      # test/consumer against the installed tree, as Basu's engine uses it:
+      # find_package(tts-cpp), a shared library with everything static inside
+      # (on Linux linked with -z defs, the C++ runtime inside and nothing
+      # re-exported), and a program that loads it and lists ggml's backends
+      # and devices.
+      - name: Smoke test
+        run: |
+          cmake -S test/consumer -B build-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$PWD/stage/${{ steps.version.outputs.package }}" \
+            ${{ matrix.platform_args }} ${VULKAN_ARGS:-} \
+            "-DTTS_PROBE_REQUIRE=${{ matrix.probe_require }}"
+          cmake --build build-consumer
+          ctest --test-dir build-consumer --output-on-failure
+
+      - name: Package
+        env:
+          PACKAGE: ${{ steps.version.outputs.package }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          (
+            cd stage
+            if [ "$ARCHIVE" = zip ]; then
+              zip -qr "../$PACKAGE.zip" "$PACKAGE"
+            else
+              tar -czf "../$PACKAGE.tar.gz" "$PACKAGE"
+            fi
+          )
+          ls -l "$PACKAGE.$ARCHIVE"
+          # sha256sum's format on every platform (macOS has only shasum, and
+          # MSYS2's sha256sum marks the name with *).
+          if command -v sha256sum >/dev/null; then
+            sha=$(sha256sum "$PACKAGE.$ARCHIVE" | cut -d' ' -f1)
+          else
+            sha=$(shasum -a 256 "$PACKAGE.$ARCHIVE" | cut -d' ' -f1)
+          fi
+          printf '%s  %s\n' "$sha" "$PACKAGE.$ARCHIVE" | tee "$PACKAGE.$ARCHIVE.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.version.outputs.package }}
+          path: |
+            ${{ steps.version.outputs.package }}.${{ matrix.archive }}
+            ${{ steps.version.outputs.package }}.${{ matrix.archive }}.sha256
+          if-no-files-found: error
+
+      # The runner's own bash, not MSYS2's: gh is installed on every runner,
+      # and MSYS2's shell does not see it.
+      - name: Attach to release
+        if: ${{ github.event_name == 'release' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          FILE: ${{ steps.version.outputs.package }}.${{ matrix.archive }}
+        run: gh release upload "$TAG" "$FILE" "$FILE.sha256" --clobber --repo "$GITHUB_REPOSITORY"
